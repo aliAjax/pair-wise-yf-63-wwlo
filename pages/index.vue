@@ -46,7 +46,7 @@ const submit = handleSubmit((values) => {
 const unblind = async (id: string, participantNumber: string) => {
   try {
     const { value } = await ElMessageBox.prompt(`为 ${participantNumber} 填写紧急揭盲原因`, '紧急揭盲', { inputType: 'textarea', inputValidator: (value) => Boolean(value?.trim()) || '揭盲原因不能为空', confirmButtonText: '确认并审计' });
-    trial.emergencyUnblind(id, value, actor.value);
+    trial.emergencyUnblind(id, value, actor.value ?? '系统');
     ElMessage.warning('已揭盲，审计记录已追加');
   } catch {}
 };
@@ -55,7 +55,8 @@ const counts = computed(() => ({
   total: participants.value.length,
   unblinded: participants.value.filter((item) => item.status === 'unblinded').length,
   sites: Object.keys(trial.bySite).length,
-  pending: trial.pendingCount
+  pending: trial.pendingCount,
+  conflict: trial.conflictCount
 }));
 </script>
 
@@ -66,11 +67,12 @@ const counts = computed(() => ({
       <el-segmented v-model="role" :options="[{ label: '研究者', value: 'investigator' }, { label: '药品管理员', value: 'pharmacist' }, { label: '监察员', value: 'monitor' }]" />
     </header>
 
-    <section style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-bottom:20px">
+    <section style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:16px;margin-bottom:20px">
       <div class="stat"><span>已随机入组</span><b>{{ counts.total }}</b></div>
       <div class="stat"><span>紧急揭盲</span><b>{{ counts.unblinded }}</b></div>
       <div class="stat"><span>参与中心</span><b>{{ counts.sites }}</b></div>
       <div class="stat"><span>待提交</span><b>{{ counts.pending }}</b></div>
+      <div class="stat"><span>核对冲突</span><b style="color:#c45656">{{ counts.conflict }}</b></div>
     </section>
 
     <div class="grid">
@@ -102,16 +104,37 @@ const counts = computed(() => ({
       <el-card shadow="never">
         <template #header><b>{{ t('pending') }}</b></template>
         <el-empty v-if="pending.length === 0" description="暂无待提交记录" />
-        <el-table v-else :data="pending">
-          <el-table-column prop="payload.participantNo" label="受试者" />
-          <el-table-column prop="status" label="状态" />
-          <el-table-column label="操作"><template #default="{ row }"><el-button :disabled="row.status !== 'pending'" size="small" type="primary" @click="trial.commitPending(row.id, actor)">确认入库</el-button></template></el-table-column>
+        <el-table v-else :data="pending" max-height="360">
+          <el-table-column prop="payload.participantNo" label="受试者" min-width="110" />
+          <el-table-column prop="payload.site" label="中心" min-width="100" />
+          <el-table-column prop="payload.ageBand" label="年龄层" width="90" />
+          <el-table-column prop="sequence" label="预分配随机号" width="110" />
+          <el-table-column label="预分配治疗组" width="110">
+            <template #default="{ row }">
+              <el-tag v-if="row.status === 'conflict'" type="danger">冲突作废</el-tag>
+              <el-tag v-else type="info">{{ visibleArm(row.arm, row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }">
+              <el-tag v-if="row.status === 'pending'" type="warning">待提交</el-tag>
+              <el-tag v-else-if="row.status === 'committed'" type="success">已入库</el-tag>
+              <el-tag v-else type="danger">冲突</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" min-width="160">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'pending'" size="small" type="primary" @click="trial.commitPending(row.id, actor ?? '系统')">确认入库</el-button>
+              <span v-else-if="row.status === 'conflict'" class="conflict-reason">{{ row.conflictReason }}</span>
+              <span v-else class="committed-note">已入库</span>
+            </template>
+          </el-table-column>
         </el-table>
       </el-card>
       <el-card shadow="never">
         <template #header><b>{{ t('audit') }}</b><el-tag type="warning" style="float:right">仅追加</el-tag></template>
         <el-timeline>
-          <el-timeline-item v-for="entry in audits" :key="entry.id" :timestamp="new Date(entry.at).toLocaleString()" :type="entry.action === 'unblinded' ? 'danger' : entry.action === 'duplicate-blocked' ? 'warning' : 'primary'">
+          <el-timeline-item v-for="entry in audits" :key="entry.id" :timestamp="new Date(entry.at).toLocaleString()" :type="entry.action === 'unblinded' ? 'danger' : entry.action === 'duplicate-blocked' || entry.action === 'pending-conflict' ? 'warning' : 'primary'">
             <b>{{ entry.actor }} · {{ entry.action }}</b><div>{{ entry.detail }}</div>
           </el-timeline-item>
         </el-timeline>
@@ -121,5 +144,7 @@ const counts = computed(() => ({
 </template>
 
 <style scoped>
-@media (max-width: 900px) { section { grid-template-columns: 1fr 1fr !important; } }
+@media (max-width: 900px) { section { grid-template-columns: repeat(2, 1fr) !important; } }
+.conflict-reason { color: #c45656; font-size: 12px; line-height: 1.4; }
+.committed-note { color: #67c23a; font-size: 12px; }
 </style>
