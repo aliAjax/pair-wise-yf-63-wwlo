@@ -27,10 +27,23 @@ const [site] = defineField('site');
 const [ageBand] = defineField('ageBand');
 const [actor] = defineField('actor');
 
-const visibleArm = (arm?: 'A' | 'B', status?: string) => {
-  if (role.value === 'pharmacist') return arm ?? '待分配';
-  if (role.value === 'monitor' && status === 'unblinded') return arm ?? '未知';
-  return '已隐藏';
+// 治疗组可见范围按角色边界控制：药品管理员始终可见（发药），研究者/监察员仅揭盲后可见
+const visibleArm = (arm?: 'A' | 'B', unblinded = false) => {
+  if (!arm) return '待分配';
+  if (role.value === 'pharmacist') return arm;
+  return unblinded ? arm : '已隐藏';
+};
+
+const pendingStatusMeta = (status: string) => {
+  if (status === 'committed') return { type: 'success' as const, label: '已入库' };
+  if (status === 'conflict') return { type: 'danger' as const, label: '冲突' };
+  return { type: 'warning' as const, label: '待提交' };
+};
+
+const auditType = (action: string) => {
+  if (action === 'unblinded' || action === 'pending-conflict') return 'danger';
+  if (action === 'duplicate-blocked') return 'warning';
+  return 'primary';
 };
 
 const submit = handleSubmit((values) => {
@@ -43,10 +56,16 @@ const submit = handleSubmit((values) => {
   resetForm({ values: { participantNo: '', identityKey: '', site: values.site, ageBand: values.ageBand, actor: values.actor } });
 });
 
+const commit = (id: string) => {
+  const result = trial.commitPending(id, actor.value ?? '未知操作人');
+  if (result.ok) ElMessage.success(result.message);
+  else ElMessage.error(result.message);
+};
+
 const unblind = async (id: string, participantNumber: string) => {
   try {
     const { value } = await ElMessageBox.prompt(`为 ${participantNumber} 填写紧急揭盲原因`, '紧急揭盲', { inputType: 'textarea', inputValidator: (value) => Boolean(value?.trim()) || '揭盲原因不能为空', confirmButtonText: '确认并审计' });
-    trial.emergencyUnblind(id, value, actor.value);
+    trial.emergencyUnblind(id, value, actor.value ?? '未知操作人');
     ElMessage.warning('已揭盲，审计记录已追加');
   } catch {}
 };
@@ -91,8 +110,9 @@ const counts = computed(() => ({
         <el-table :data="participants" max-height="480">
           <el-table-column prop="participantNo" label="受试者" min-width="110" />
           <el-table-column prop="site" label="中心" min-width="110" />
+          <el-table-column prop="ageBand" label="年龄分层" width="90" />
           <el-table-column prop="sequence" label="随机号" width="90" />
-          <el-table-column label="治疗组" width="100"><template #default="{ row }"><el-tag :type="row.status === 'unblinded' ? 'danger' : 'info'">{{ visibleArm(row.arm, row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="治疗组" width="100"><template #default="{ row }"><el-tag :type="row.status === 'unblinded' ? 'danger' : 'info'">{{ visibleArm(row.arm, row.status === 'unblinded') }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="100"><template #default="{ row }"><el-button v-if="role === 'investigator'" size="small" type="danger" plain @click="unblind(row.id, row.participantNo)">揭盲</el-button></template></el-table-column>
         </el-table>
       </el-card>
@@ -103,15 +123,19 @@ const counts = computed(() => ({
         <template #header><b>{{ t('pending') }}</b></template>
         <el-empty v-if="pending.length === 0" description="暂无待提交记录" />
         <el-table v-else :data="pending">
-          <el-table-column prop="payload.participantNo" label="受试者" />
-          <el-table-column prop="status" label="状态" />
-          <el-table-column label="操作"><template #default="{ row }"><el-button :disabled="row.status !== 'pending'" size="small" type="primary" @click="trial.commitPending(row.id, actor)">确认入库</el-button></template></el-table-column>
+          <el-table-column prop="payload.participantNo" label="受试者" min-width="100" />
+          <el-table-column prop="payload.site" label="中心" min-width="100" />
+          <el-table-column prop="sequence" label="随机号" width="80" />
+          <el-table-column label="治疗组" width="90"><template #default="{ row }"><el-tag type="info">{{ visibleArm(row.arm, false) }}</el-tag></template></el-table-column>
+          <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="pendingStatusMeta(row.status).type">{{ pendingStatusMeta(row.status).label }}</el-tag></template></el-table-column>
+          <el-table-column label="冲突原因" min-width="180"><template #default="{ row }"><span v-if="row.conflictReason" style="color:#c45656">{{ row.conflictReason }}</span><span v-else>—</span></template></el-table-column>
+          <el-table-column label="操作" width="110"><template #default="{ row }"><el-button :disabled="row.status !== 'pending'" size="small" type="primary" @click="commit(row.id)">确认入库</el-button></template></el-table-column>
         </el-table>
       </el-card>
       <el-card shadow="never">
         <template #header><b>{{ t('audit') }}</b><el-tag type="warning" style="float:right">仅追加</el-tag></template>
         <el-timeline>
-          <el-timeline-item v-for="entry in audits" :key="entry.id" :timestamp="new Date(entry.at).toLocaleString()" :type="entry.action === 'unblinded' ? 'danger' : entry.action === 'duplicate-blocked' ? 'warning' : 'primary'">
+          <el-timeline-item v-for="entry in audits" :key="entry.id" :timestamp="new Date(entry.at).toLocaleString()" :type="auditType(entry.action)">
             <b>{{ entry.actor }} · {{ entry.action }}</b><div>{{ entry.detail }}</div>
           </el-timeline-item>
         </el-timeline>

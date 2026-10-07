@@ -1,6 +1,6 @@
 export type TrialRole = 'investigator' | 'pharmacist' | 'monitor';
 export type Arm = 'A' | 'B';
-export type AuditAction = 'randomized' | 'unblinded' | 'pending-queued' | 'pending-committed' | 'duplicate-blocked';
+export type AuditAction = 'randomized' | 'unblinded' | 'pending-queued' | 'pending-committed' | 'pending-conflict' | 'duplicate-blocked';
 
 export interface Participant {
   id: string;
@@ -23,11 +23,19 @@ export interface AuditEntry {
   participantNo?: string;
 }
 
+export type PendingStatus = 'pending' | 'committed' | 'conflict';
+
 export interface PendingRandomization {
   id: string;
   payload: RandomizeInput;
+  /** 随机号在进入队列时固定，入库时不再补发 */
+  sequence: number;
+  /** 入队时按中心 + 年龄分层区组预分配的治疗组 */
+  arm: Arm;
   createdAt: string;
-  status: 'pending' | 'committed';
+  status: PendingStatus;
+  /** 入库前核对发现的冲突说明 */
+  conflictReason?: string;
 }
 
 export interface RandomizeInput {
